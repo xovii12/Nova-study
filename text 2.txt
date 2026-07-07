@@ -1,0 +1,1154 @@
+import React, { useState, useEffect, useRef } from 'react';
+import { 
+  Sparkles, 
+  BookOpen, 
+  FileText, 
+  HelpCircle, 
+  Compass, 
+  Send, 
+  Upload, 
+  CheckCircle2, 
+  X, 
+  Plus, 
+  Trash2, 
+  Award, 
+  Moon, 
+  ArrowRight,
+  Info,
+  ChevronRight,
+  MessageSquare,
+  RefreshCw,
+  Zap,
+  Target,
+  Heart
+} from 'lucide-react';
+
+// Setup API Key (provided dynamically at runtime, defaults to empty)
+const apiKey = "";
+
+export default function App() {
+  // Navigation
+  const [activeTab, setActiveTab] = useState('hub'); // 'hub', 'quiz', 'dreams'
+
+  // Input States
+  const [inputText, setInputText] = useState('');
+  const [imageFile, setImageFile] = useState(null);
+  const [imagePreview, setImagePreview] = useState('');
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [statusMessage, setStatusMessage] = useState('');
+
+  // AI Content Output States
+  const [summary, setSummary] = useState('');
+  const [notes, setNotes] = useState('');
+  
+  // Quiz States
+  const [quizQuestions, setQuizQuestions] = useState([]);
+  const [selectedAnswers, setSelectedAnswers] = useState({});
+  const [submittedQuiz, setSubmittedQuiz] = useState(false);
+  const [quizScore, setQuizScore] = useState(0);
+
+  // Chat States
+  const [chatHistory, setChatHistory] = useState([
+    { role: 'assistant', text: "Hello starfarer! 🌌 I am AstroAI. Drop some notes, text, or screenshots above, and we can explore the cosmos of knowledge together! Ask me any questions you have." }
+  ]);
+  const [chatInput, setChatInput] = useState('');
+  const chatEndRef = useRef(null);
+
+  // Dreams & Goals Board State
+  const [dreams, setDreams] = useState([
+    { id: 1, title: 'Ace Physics', content: 'Understand Special Relativity by next month!', category: 'Goal', color: 'purple', achieved: false },
+    { id: 2, title: 'Build a Rocket', content: 'Study aerospace engineering at MIT!', category: 'Dream', color: 'indigo', achieved: false },
+    { id: 3, title: 'Daily Mantra', content: 'Do not look back, you are not going that way. Keep sailing into the unknown.', category: 'Motivation', color: 'pink', achieved: true }
+  ]);
+  const [newDreamTitle, setNewDreamTitle] = useState('');
+  const [newDreamContent, setNewDreamContent] = useState('');
+  const [newDreamCategory, setNewDreamCategory] = useState('Goal');
+  const [newDreamColor, setNewDreamColor] = useState('purple');
+
+  // Custom Notifications/Modals
+  const [toast, setToast] = useState({ show: false, message: '', type: 'success' });
+
+  const showToast = (message, type = 'success') => {
+    setToast({ show: true, message, type });
+    setTimeout(() => setToast({ show: false, message: '', type: 'success' }), 4000);
+  };
+
+  // Scroll to bottom of chat
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [chatHistory]);
+
+  // Convert image to base64
+  const handleImageChange = (e) => {
+    const file = e.target.files[0];
+    if (file) {
+      if (file.size > 4 * 1024 * 1024) {
+        showToast("Please choose an image under 4MB", "error");
+        return;
+      }
+      setImageFile(file);
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setImagePreview(reader.result);
+        showToast("Cosmic scan ready for image analysis!", "success");
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
+  const clearImage = () => {
+    setImageFile(null);
+    setImagePreview('');
+  };
+
+  // Exponential backoff API call helper
+  const fetchWithRetry = async (url, options, maxRetries = 5) => {
+    for (let i = 0; i < maxRetries; i++) {
+      try {
+        const response = await fetch(url, options);
+        if (response.ok) {
+          return await response.json();
+        }
+      } catch (err) {
+        // Handled via exponential backoff silently
+      }
+      const delay = Math.pow(2, i) * 1000;
+      await new Promise(res => setTimeout(res, delay));
+    }
+    throw new Error("Unable to establish steady telemetry with AstroAI. Please try again.");
+  };
+
+  // Generalized Gemini API Call
+  const queryGemini = async (promptText, systemInstruction, imageBase64 = null) => {
+    let url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
+    
+    let parts = [{ text: promptText }];
+    if (imageBase64) {
+      // Remove dataurl prefix if present
+      const cleanBase64 = imageBase64.split(',')[1] || imageBase64;
+      parts.push({
+        inlineData: {
+          mimeType: imageFile ? imageFile.type : "image/png",
+          data: cleanBase64
+        }
+      });
+    }
+
+    const payload = {
+      contents: [{ parts }],
+      systemInstruction: { parts: [{ text: systemInstruction }] }
+    };
+
+    const options = {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    };
+
+    return await fetchWithRetry(url, options);
+  };
+
+  // Summarize Handler
+  const generateSummary = async () => {
+    if (!inputText && !imagePreview) {
+      showToast("Please type text or upload an image first!", "warning");
+      return;
+    }
+
+    setIsProcessing(true);
+    setStatusMessage("Decrypting cosmic waves into summary...");
+
+    const prompt = inputText 
+      ? `Summarize this educational content in a structured, beautifully formatted layout. Use clear headings, bullet points, and highlight key terms: \n\n${inputText}`
+      : "Analyze the uploaded image and extract the main content. Summarize it into clean, beautifully structured study notes using headings, bullet points, and highlight definitions.";
+
+    const systemPrompt = "You are a professional, helpful educational summaries AI. Format your markdown strictly for standard display. Keep definitions precise, structure logical, and tone inspiring.";
+
+    try {
+      const data = await queryGemini(prompt, systemPrompt, imagePreview);
+      const textOutput = data.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (textOutput) {
+        setSummary(textOutput);
+        showToast("Cosmic summary formulated!", "success");
+      } else {
+        throw new Error("Telemetric payload empty");
+      }
+    } catch (error) {
+      showToast(error.message, "error");
+    } finally {
+      setIsProcessing(false);
+      setStatusMessage('');
+    }
+  };
+
+  // Notes Handler
+  const generateNotes = async () => {
+    if (!inputText && !imagePreview) {
+      showToast("Please type text or upload an image first!", "warning");
+      return;
+    }
+
+    setIsProcessing(true);
+    setStatusMessage("Constructing comprehensive Star-Notes...");
+
+    const prompt = inputText
+      ? `Create deeply organized study notes from this text. Include: Introduction, Core Principles (with detailed explanations), Formulas/Keywords, Real-world analogies, and a Quick Review. Text:\n\n${inputText}`
+      : "Analyze this image and design structured academic study notes from it. Organize with: Title, Core Concepts, In-depth Explanations, Key Takeaways, and a mnemonic/analogy helper.";
+
+    const systemPrompt = "You are AstroNotes, a specialized digital note-taking AI. Create incredibly clean, professional, and dense study sheets with clear headers, lists, and visual spacing.";
+
+    try {
+      const data = await queryGemini(prompt, systemPrompt, imagePreview);
+      const textOutput = data.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (textOutput) {
+        setNotes(textOutput);
+        showToast("Star-Notes drafted perfectly!", "success");
+      } else {
+        throw new Error("Telemetric payload empty");
+      }
+    } catch (error) {
+      showToast(error.message, "error");
+    } finally {
+      setIsProcessing(false);
+      setStatusMessage('');
+    }
+  };
+
+  // Quiz Handler (uses Structured JSON)
+  const generateQuiz = async () => {
+    if (!inputText && !imagePreview) {
+      showToast("Please provide study content (text or image) to forge a quiz!", "warning");
+      return;
+    }
+
+    setIsProcessing(true);
+    setStatusMessage("Forging quiz challenges...");
+
+    const prompt = inputText
+      ? `Create a challenging 5-question multiple choice quiz on the following material. Provide it in JSON format conforming strictly to the requested schema. Content:\n\n${inputText}`
+      : `Analyze this educational image and create a 5-question multiple choice quiz based on its concepts. Provide it in JSON format conforming strictly to the requested schema.`;
+
+    // Target API URL for Structured JSON
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
+    
+    let parts = [{ text: prompt }];
+    if (imagePreview) {
+      const cleanBase = imagePreview.split(',')[1] || imagePreview;
+      parts.push({
+        inlineData: {
+          mimeType: imageFile ? imageFile.type : "image/png",
+          data: cleanBase
+        }
+      });
+    }
+
+    const payload = {
+      contents: [{ parts }],
+      systemInstruction: { 
+        parts: [{ text: "You are an expert examiner. Generate 5 highly relevant multiple choice questions on the provided study topic. Each must have 4 options, a correctIndex (0 to 3), and a comprehensive, encouraging explanation." }] 
+      },
+      generationConfig: {
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: "OBJECT",
+          properties: {
+            quiz: {
+              type: "ARRAY",
+              items: {
+                type: "OBJECT",
+                properties: {
+                  question: { type: "STRING" },
+                  options: {
+                    type: "ARRAY",
+                    items: { type: "STRING" }
+                  },
+                  correctIndex: { type: "INTEGER" },
+                  explanation: { type: "STRING" }
+                },
+                required: ["question", "options", "correctIndex", "explanation"]
+              }
+            }
+          },
+          required: ["quiz"]
+        }
+      }
+    };
+
+    try {
+      const response = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      
+      if (!response.ok) throw new Error("Cosmic network drop while forging quiz.");
+      
+      const resData = await response.json();
+      const jsonText = resData.candidates?.[0]?.content?.parts?.[0]?.text;
+      
+      if (jsonText) {
+        const parsed = JSON.parse(jsonText);
+        if (parsed.quiz && parsed.quiz.length > 0) {
+          setQuizQuestions(parsed.quiz);
+          setSelectedAnswers({});
+          setSubmittedQuiz(false);
+          setQuizScore(0);
+          setActiveTab('quiz'); // auto route to quiz tab
+          showToast("A new Quantum Quiz has been forged!", "success");
+        } else {
+          throw new Error("Could not construct structured cosmic queries.");
+        }
+      } else {
+        throw new Error("Telemetric payload empty");
+      }
+    } catch (error) {
+      showToast(error.message, "error");
+    } finally {
+      setIsProcessing(false);
+      setStatusMessage('');
+    }
+  };
+
+  // Custom User Chat Prompt
+  const handleChatSubmit = async (e) => {
+    e.preventDefault();
+    if (!chatInput.trim()) return;
+
+    const userMessage = chatInput.trim();
+    setChatHistory(prev => [...prev, { role: 'user', text: userMessage }]);
+    setChatInput('');
+
+    setIsProcessing(true);
+
+    const contextText = `
+      STUDY CONTEXT AVAILABLE:
+      -----------------------
+      Raw text: ${inputText}
+      -----------------------
+      Current summary: ${summary}
+      -----------------------
+      Current Notes: ${notes}
+      -----------------------
+    `;
+
+    const systemPrompt = "You are AstroAI, a friendly educational mentor who is highly expert, encouraging, and witty. Answer the student's question accurately based on the context of their study materials. Give fun cosmic/space analogies when appropriate.";
+    const userQuery = `Refer to this study context to answer my question. If the context does not contain the answer, use your scientific cosmic knowledge to guide me beautifully. Question: ${userMessage} \n\n${contextText}`;
+
+    try {
+      const data = await queryGemini(userQuery, systemPrompt);
+      const textOutput = data.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (textOutput) {
+        setChatHistory(prev => [...prev, { role: 'assistant', text: textOutput }]);
+      } else {
+        throw new Error("Failed to contact AstroAI base.");
+      }
+    } catch (error) {
+      setChatHistory(prev => [...prev, { role: 'assistant', text: `⚠️ Error communicating with system: ${error.message}` }]);
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  // Dreams/Goals Handlers
+  const addDream = (e) => {
+    e.preventDefault();
+    if (!newDreamTitle.trim() || !newDreamContent.trim()) {
+      showToast("Give your celestial dream a title and description!", "warning");
+      return;
+    }
+    const created = {
+      id: Date.now(),
+      title: newDreamTitle.trim(),
+      content: newDreamContent.trim(),
+      category: newDreamCategory,
+      color: newDreamColor,
+      achieved: false
+    };
+    setDreams([created, ...dreams]);
+    setNewDreamTitle('');
+    setNewDreamContent('');
+    showToast("Dream anchored in the stardust!", "success");
+  };
+
+  const toggleAchieved = (id) => {
+    setDreams(dreams.map(d => {
+      if (d.id === id) {
+        const nextState = !d.achieved;
+        if (nextState) showToast("Congratulations! Keep exploring! ⭐", "success");
+        return { ...d, achieved: nextState };
+      }
+      return d;
+    }));
+  };
+
+  const deleteDream = (id) => {
+    setDreams(dreams.filter(d => d.id !== id));
+    showToast("Dream orbit adjusted.", "info");
+  };
+
+  // Helper styles for colors
+  const getColorClasses = (colorName, achieved) => {
+    const opacity = achieved ? 'opacity-60 saturate-50' : 'opacity-100';
+    switch (colorName) {
+      case 'purple':
+        return `bg-gradient-to-br from-violet-900/40 to-purple-900/40 border-purple-500/50 shadow-purple-900/30 text-purple-100 ${opacity}`;
+      case 'indigo':
+        return `bg-gradient-to-br from-indigo-900/40 to-blue-900/40 border-indigo-500/50 shadow-indigo-900/30 text-indigo-100 ${opacity}`;
+      case 'pink':
+        return `bg-gradient-to-br from-fuchsia-900/40 to-pink-900/40 border-pink-500/50 shadow-pink-900/30 text-pink-100 ${opacity}`;
+      case 'gold':
+        return `bg-gradient-to-br from-yellow-900/40 to-amber-900/40 border-amber-500/50 shadow-amber-900/30 text-amber-100 ${opacity}`;
+      default:
+        return `bg-slate-900/80 border-slate-700 text-slate-100 ${opacity}`;
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-slate-950 text-slate-100 font-sans selection:bg-purple-600 selection:text-white overflow-x-hidden relative pb-16">
+      
+      {/* Background stars overlay */}
+      <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-purple-950/40 via-slate-950 to-black pointer-events-none z-0" />
+      <div className="absolute top-20 left-10 w-72 h-72 bg-purple-600/10 rounded-full blur-3xl pointer-events-none" />
+      <div className="absolute bottom-20 right-10 w-96 h-96 bg-indigo-600/10 rounded-full blur-3xl pointer-events-none" />
+
+      {/* Floating stars */}
+      <div className="absolute inset-0 opacity-20 pointer-events-none bg-[url('https://images.unsplash.com/photo-1506318137071-a8e063b4bec0?auto=format&fit=crop&w=1000&q=80')] mix-blend-color-dodge bg-cover bg-center z-0" />
+
+      {/* Toast Alert */}
+      {toast.show && (
+        <div className={`fixed bottom-6 right-6 z-50 flex items-center space-x-2 px-5 py-3 rounded-xl border shadow-xl transition-all duration-300 transform translate-y-0 ${
+          toast.type === 'success' ? 'bg-emerald-950/90 border-emerald-500 text-emerald-200' :
+          toast.type === 'error' ? 'bg-rose-950/90 border-rose-500 text-rose-200' :
+          'bg-indigo-950/90 border-indigo-500 text-indigo-200'
+        }`}>
+          <div className="w-2 h-2 rounded-full animate-ping bg-current" />
+          <span className="font-medium text-sm">{toast.message}</span>
+        </div>
+      )}
+
+      {/* Global Status Loader */}
+      {isProcessing && (
+        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex flex-col justify-center items-center">
+          <div className="relative flex items-center justify-center">
+            <div className="w-20 h-20 border-t-4 border-b-4 border-purple-500 rounded-full animate-spin"></div>
+            <div className="absolute w-12 h-12 border-r-4 border-l-4 border-indigo-400 rounded-full animate-spin [animation-duration:1.5s]"></div>
+            <Sparkles className="absolute text-purple-400 w-6 h-6 animate-pulse" />
+          </div>
+          <p className="mt-6 text-purple-200 text-lg font-medium tracking-wide animate-pulse">
+            {statusMessage || "Syncing with NovaStudy matrix..."}
+          </p>
+        </div>
+      )}
+
+      {/* Navigation Header */}
+      <header className="relative z-10 border-b border-purple-900/40 bg-slate-950/75 backdrop-blur-md sticky top-0 px-4 md:px-8 py-4">
+        <div className="max-w-7xl mx-auto flex flex-col sm:flex-row justify-between items-center gap-4">
+          
+          {/* Logo */}
+          <div className="flex items-center space-x-3 group">
+            <div className="p-2.5 bg-gradient-to-tr from-purple-600 to-indigo-600 rounded-xl shadow-[0_0_15px_rgba(147,51,234,0.4)] transition-transform group-hover:scale-105">
+              <Sparkles className="w-6 h-6 text-white animate-spin [animation-duration:12s]" />
+            </div>
+            <div>
+              <h1 className="text-2xl font-bold tracking-tight bg-gradient-to-r from-purple-200 via-purple-400 to-indigo-300 bg-clip-text text-transparent">
+                NovaStudy
+              </h1>
+              <span className="text-[10px] text-indigo-300 font-semibold uppercase tracking-widest block">
+                Cosmic AI Study Room
+              </span>
+            </div>
+          </div>
+
+          {/* Navigation Controls */}
+          <div className="flex bg-slate-900/90 border border-purple-950/60 p-1.5 rounded-xl space-x-1">
+            <button
+              onClick={() => setActiveTab('hub')}
+              className={`flex items-center space-x-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+                activeTab === 'hub'
+                  ? 'bg-gradient-to-r from-purple-800 to-indigo-800 text-white shadow-lg'
+                  : 'text-slate-400 hover:text-purple-300 hover:bg-purple-950/20'
+              }`}
+            >
+              <Compass className="w-4 h-4" />
+              <span>Cosmic Hub</span>
+            </button>
+            <button
+              onClick={() => {
+                if (quizQuestions.length === 0) {
+                  showToast("Forge a quiz from materials in Cosmic Hub first!", "info");
+                }
+                setActiveTab('quiz');
+              }}
+              className={`flex items-center space-x-2 px-4 py-2 rounded-lg text-sm font-medium transition-all relative ${
+                activeTab === 'quiz'
+                  ? 'bg-gradient-to-r from-purple-800 to-indigo-800 text-white shadow-lg'
+                  : 'text-slate-400 hover:text-purple-300 hover:bg-purple-950/20'
+              }`}
+            >
+              <HelpCircle className="w-4 h-4" />
+              <span>Quantum Quiz</span>
+              {quizQuestions.length > 0 && !submittedQuiz && (
+                <span className="absolute -top-1.5 -right-1.5 bg-pink-500 text-white text-[9px] px-1.5 py-0.5 rounded-full font-bold animate-bounce">
+                  NEW
+                </span>
+              )}
+            </button>
+            <button
+              onClick={() => setActiveTab('dreams')}
+              className={`flex items-center space-x-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+                activeTab === 'dreams'
+                  ? 'bg-gradient-to-r from-purple-800 to-indigo-800 text-white shadow-lg'
+                  : 'text-slate-400 hover:text-purple-300 hover:bg-purple-950/20'
+              }`}
+            >
+              <Moon className="w-4 h-4" />
+              <span>Nebula Board</span>
+            </button>
+          </div>
+        </div>
+      </header>
+
+      {/* Main Container */}
+      <main className="relative z-10 max-w-7xl mx-auto px-4 md:px-8 mt-8">
+        
+        {/* TAB 1: COSMIC HUB */}
+        {activeTab === 'hub' && (
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
+            
+            {/* Input Column (Left Side) */}
+            <div className="lg:col-span-5 space-y-6">
+              
+              {/* Cosmic Intake Station */}
+              <div className="bg-slate-900/60 border border-purple-900/40 rounded-2xl p-6 backdrop-blur-md shadow-xl">
+                <div className="flex items-center justify-between mb-4">
+                  <div className="flex items-center space-x-2.5">
+                    <div className="p-1.5 bg-purple-500/20 rounded-lg text-purple-400">
+                      <BookOpen className="w-5 h-5" />
+                    </div>
+                    <h3 className="font-semibold text-lg text-purple-100">Intake Station</h3>
+                  </div>
+                  <span className="text-xs text-purple-400 font-mono">Telemetry Input</span>
+                </div>
+
+                <p className="text-xs text-slate-400 mb-4 leading-relaxed">
+                  Provide textbook snippets, random notes, or upload a picture containing academic study content.
+                </p>
+
+                {/* Text input area */}
+                <textarea
+                  value={inputText}
+                  onChange={(e) => setInputText(e.target.value)}
+                  placeholder="Paste study text, lecture slide notes, raw transcript, or syllabus here..."
+                  className="w-full h-44 bg-slate-950/80 border border-purple-950 text-slate-200 placeholder-slate-600 rounded-xl p-4 text-sm focus:outline-none focus:border-purple-500 focus:ring-1 focus:ring-purple-500 transition-all resize-none mb-4"
+                />
+
+                {/* Image Upload Area */}
+                <div className="mb-6">
+                  {!imagePreview ? (
+                    <label className="flex flex-col items-center justify-center border-2 border-dashed border-purple-900/40 bg-slate-950/30 hover:bg-slate-950/60 rounded-xl p-6 cursor-pointer group transition-all">
+                      <Upload className="w-8 h-8 text-purple-400 group-hover:text-purple-300 mb-2 transition-transform group-hover:-translate-y-0.5" />
+                      <span className="text-xs font-semibold text-purple-300">Scan Textbook or Notes Image</span>
+                      <span className="text-[10px] text-slate-500 mt-1">PNG, JPG up to 4MB</span>
+                      <input 
+                        type="file" 
+                        accept="image/*" 
+                        onChange={handleImageChange} 
+                        className="hidden" 
+                      />
+                    </label>
+                  ) : (
+                    <div className="relative border border-purple-800 rounded-xl overflow-hidden bg-slate-950">
+                      <img 
+                        src={imagePreview} 
+                        alt="Cosmic Scan Source" 
+                        className="w-full h-32 object-cover opacity-70"
+                      />
+                      <div className="absolute inset-0 bg-gradient-to-t from-slate-950 via-transparent to-transparent flex items-end p-3">
+                        <div className="flex items-center space-x-2 text-xs text-purple-200 font-mono bg-slate-950/80 px-2 py-1 rounded">
+                          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                          <span>Image uploaded</span>
+                        </div>
+                      </div>
+                      <button 
+                        onClick={clearImage}
+                        className="absolute top-2.5 right-2.5 p-1 bg-slate-950/90 text-slate-400 hover:text-white rounded-full border border-purple-900/30"
+                        title="Remove image"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  )}
+                </div>
+
+                {/* Processing Actions Grid */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <button
+                    onClick={generateSummary}
+                    className="flex items-center justify-center space-x-2 py-3 px-4 bg-gradient-to-r from-purple-800 to-indigo-800 hover:from-purple-700 hover:to-indigo-700 active:scale-[0.98] transition-all rounded-xl text-xs font-semibold shadow-lg text-white group"
+                  >
+                    <FileText className="w-4 h-4 text-purple-300" />
+                    <span>Generate Summary</span>
+                  </button>
+                  <button
+                    onClick={generateNotes}
+                    className="flex items-center justify-center space-x-2 py-3 px-4 bg-gradient-to-r from-purple-800 to-indigo-800 hover:from-purple-700 hover:to-indigo-700 active:scale-[0.98] transition-all rounded-xl text-xs font-semibold shadow-lg text-white group"
+                  >
+                    <Sparkles className="w-4 h-4 text-pink-300" />
+                    <span>Forge Star-Notes</span>
+                  </button>
+                  <button
+                    onClick={generateQuiz}
+                    className="sm:col-span-2 flex items-center justify-center space-x-2 py-3.5 px-4 bg-gradient-to-r from-pink-600 to-purple-600 hover:from-pink-500 hover:to-purple-500 active:scale-[0.98] transition-all rounded-xl text-xs font-bold shadow-lg shadow-purple-900/20 text-white"
+                  >
+                    <Zap className="w-4 h-4 text-amber-300 animate-pulse" />
+                    <span>Forge Quantum Quiz Challenge</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Chat Helper box */}
+              <div className="bg-slate-900/60 border border-purple-900/40 rounded-2xl p-4 backdrop-blur-md shadow-xl flex flex-col h-[32rem]">
+                <div className="flex items-center space-x-2 mb-3 px-2 border-b border-purple-950 pb-2">
+                  <div className="w-2.5 h-2.5 rounded-full bg-indigo-500 animate-pulse" />
+                  <span className="font-semibold text-xs tracking-wider text-slate-300 uppercase">AstroAI Tutor Chat</span>
+                </div>
+
+                {/* Messages scroll */}
+                <div className="flex-1 overflow-y-auto space-y-4 p-2 custom-scrollbar">
+                  {chatHistory.map((msg, i) => (
+                    <div 
+                      key={i} 
+                      className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
+                    >
+                      <div className={`max-w-[85%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed ${
+                        msg.role === 'user' 
+                          ? 'bg-purple-600/40 border border-purple-500/40 text-purple-100 rounded-tr-none'
+                          : 'bg-slate-950/80 border border-indigo-950 text-indigo-100 rounded-tl-none'
+                      }`}>
+                        {/* Custom formatting check for cleaner text */}
+                        <div className="whitespace-pre-wrap">{msg.text}</div>
+                      </div>
+                    </div>
+                  ))}
+                  <div ref={chatEndRef} />
+                </div>
+
+                {/* Chat input form */}
+                <form onSubmit={handleChatSubmit} className="mt-3 flex gap-2">
+                  <input
+                    type="text"
+                    value={chatInput}
+                    onChange={(e) => setChatInput(e.target.value)}
+                    placeholder="Ask AstroAI to explain or give examples..."
+                    className="flex-1 bg-slate-950/90 border border-purple-950 focus:outline-none focus:border-purple-600 rounded-xl px-4 py-2 text-xs"
+                  />
+                  <button
+                    type="submit"
+                    className="p-2.5 bg-gradient-to-r from-purple-700 to-indigo-700 rounded-xl text-white hover:opacity-90 transition-all flex items-center justify-center"
+                  >
+                    <Send className="w-4 h-4" />
+                  </button>
+                </form>
+              </div>
+
+            </div>
+
+            {/* AI Output Column (Right Side) */}
+            <div className="lg:col-span-7 space-y-6">
+
+              {/* Display Area for Summaries */}
+              <div className="bg-slate-900/40 border border-purple-900/30 rounded-2xl backdrop-blur-md shadow-xl overflow-hidden">
+                <div className="border-b border-purple-950 bg-slate-950/80 px-6 py-4 flex justify-between items-center">
+                  <div className="flex items-center space-x-2">
+                    <FileText className="w-4 h-4 text-purple-400" />
+                    <h3 className="font-bold text-sm tracking-wide text-slate-200">Cosmic Summary</h3>
+                  </div>
+                  {summary && (
+                    <span className="text-[10px] font-mono text-emerald-400 bg-emerald-950/40 border border-emerald-900/60 px-2 py-0.5 rounded">
+                      Formulated
+                    </span>
+                  )}
+                </div>
+
+                <div className="p-6 h-[22rem] overflow-y-auto custom-scrollbar prose prose-invert text-slate-300">
+                  {summary ? (
+                    <div className="space-y-4">
+                      {summary.split('\n').map((line, i) => {
+                        // Very basic beautiful markdown interpreter styling to avoid third-party packages in one file
+                        if (line.startsWith('###')) {
+                          return <h4 key={i} className="text-md font-semibold text-purple-200 mt-4 border-b border-purple-950/40 pb-1">{line.replace('###', '')}</h4>;
+                        } else if (line.startsWith('##')) {
+                          return <h3 key={i} className="text-lg font-bold text-indigo-200 mt-5">{line.replace('##', '')}</h3>;
+                        } else if (line.startsWith('#')) {
+                          return <h2 key={i} className="text-xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-purple-200 to-pink-200 border-b border-purple-900/40 pb-2 mb-4">{line.replace('#', '')}</h2>;
+                        } else if (line.startsWith('-') || line.startsWith('*')) {
+                          return <li key={i} className="ml-4 list-disc text-sm text-slate-300 py-0.5">{line.substring(2)}</li>;
+                        } else if (line.trim() === '') {
+                          return <div key={i} className="h-2" />;
+                        } else {
+                          return <p key={i} className="text-sm leading-relaxed text-slate-300">{line}</p>;
+                        }
+                      })}
+                    </div>
+                  ) : (
+                    <div className="h-full flex flex-col justify-center items-center text-center text-slate-500">
+                      <FileText className="w-12 h-12 text-slate-700 mb-2 animate-pulse" />
+                      <p className="text-xs">No active telemetry summary detected.</p>
+                      <p className="text-[10px] text-slate-600 mt-1">Populate input on the left and click 'Generate Summary'</p>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Display Area for Star-Notes */}
+              <div className="bg-slate-900/40 border border-purple-900/30 rounded-2xl backdrop-blur-md shadow-xl overflow-hidden">
+                <div className="border-b border-purple-950 bg-slate-950/80 px-6 py-4 flex justify-between items-center">
+                  <div className="flex items-center space-x-2">
+                    <Sparkles className="w-4 h-4 text-pink-400" />
+                    <h3 className="font-bold text-sm tracking-wide text-slate-200">Star-Notes</h3>
+                  </div>
+                  {notes && (
+                    <span className="text-[10px] font-mono text-pink-400 bg-pink-950/40 border border-pink-900/60 px-2 py-0.5 rounded">
+                      Drafted
+                    </span>
+                  )}
+                </div>
+
+                <div className="p-6 h-[26rem] overflow-y-auto custom-scrollbar prose prose-invert text-slate-300">
+                  {notes ? (
+                    <div className="space-y-4">
+                      {notes.split('\n').map((line, i) => {
+                        if (line.startsWith('###')) {
+                          return <h4 key={i} className="text-md font-semibold text-purple-200 mt-4 border-b border-purple-950/40 pb-1">{line.replace('###', '')}</h4>;
+                        } else if (line.startsWith('##')) {
+                          return <h3 key={i} className="text-lg font-bold text-indigo-200 mt-5">{line.replace('##', '')}</h3>;
+                        } else if (line.startsWith('#')) {
+                          return <h2 key={i} className="text-xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-pink-200 to-purple-200 border-b border-pink-900/40 pb-2 mb-4">{line.replace('#', '')}</h2>;
+                        } else if (line.startsWith('-') || line.startsWith('*')) {
+                          return <li key={i} className="ml-4 list-disc text-sm text-slate-300 py-0.5">{line.substring(2)}</li>;
+                        } else if (line.trim() === '') {
+                          return <div key={i} className="h-2" />;
+                        } else {
+                          return <p key={i} className="text-sm leading-relaxed text-slate-300">{line}</p>;
+                        }
+                      })}
+                    </div>
+                  ) : (
+                    <div className="h-full flex flex-col justify-center items-center text-center text-slate-500">
+                      <Sparkles className="w-12 h-12 text-slate-700 mb-2 animate-pulse" />
+                      <p className="text-xs">No active telemetry Star-Notes detected.</p>
+                      <p className="text-[10px] text-slate-600 mt-1">Populate input on the left and click 'Forge Star-Notes'</p>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+            </div>
+
+          </div>
+        )}
+
+        {/* TAB 2: QUANTUM QUIZZER */}
+        {activeTab === 'quiz' && (
+          <div className="max-w-4xl mx-auto space-y-6">
+            
+            {/* Header / Intro Card */}
+            <div className="bg-gradient-to-r from-purple-950/60 to-indigo-950/60 border border-purple-900/40 rounded-2xl p-6 shadow-xl backdrop-blur-md flex flex-col md:flex-row items-center gap-6">
+              <div className="p-4 bg-purple-500/10 rounded-2xl border border-purple-500/30 text-purple-400">
+                <HelpCircle className="w-10 h-10 animate-bounce" />
+              </div>
+              <div className="space-y-1 text-center md:text-left flex-1">
+                <h2 className="text-xl font-extrabold text-purple-200">Quantum Exam Matrix</h2>
+                <p className="text-xs text-slate-300 leading-relaxed">
+                  Our system generates automated MCQ challenges directly from your study material! Select the correct option, submit when ready, and receive personalized explanations for every single question.
+                </p>
+              </div>
+              {quizQuestions.length > 0 && (
+                <button
+                  onClick={generateQuiz}
+                  className="flex items-center space-x-2 bg-purple-900/60 hover:bg-purple-850 border border-purple-700 text-purple-200 px-4 py-2 rounded-xl text-xs font-semibold"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" />
+                  <span>Regenerate Quiz</span>
+                </button>
+              )}
+            </div>
+
+            {/* Questions Container */}
+            {quizQuestions.length === 0 ? (
+              <div className="bg-slate-900/40 border border-purple-900/20 rounded-2xl p-12 text-center text-slate-500 backdrop-blur-md">
+                <HelpCircle className="w-16 h-16 text-slate-700 mx-auto mb-4" />
+                <h3 className="text-md font-semibold text-slate-400">No Active Exam Found</h3>
+                <p className="text-xs max-w-md mx-auto mt-2 leading-relaxed">
+                  Head over to the <button onClick={() => setActiveTab('hub')} className="text-purple-400 hover:underline">Cosmic Hub</button>, paste text or load a picture of your notes, and press <strong>'Forge Quantum Quiz Challenge'</strong> to generate interactive questions.
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-6">
+                
+                {quizQuestions.map((q, qIndex) => {
+                  const isCorrect = selectedAnswers[qIndex] === q.correctIndex;
+                  return (
+                    <div 
+                      key={qIndex} 
+                      className="bg-slate-900/60 border border-purple-900/40 rounded-2xl p-6 shadow-lg backdrop-blur-md transition-all"
+                    >
+                      <div className="flex items-start gap-4">
+                        <span className="flex-shrink-0 w-8 h-8 rounded-full bg-purple-900/60 border border-purple-500/30 flex items-center justify-center font-bold text-xs text-purple-300">
+                          {qIndex + 1}
+                        </span>
+                        <div className="space-y-4 flex-1">
+                          <h4 className="font-semibold text-slate-200 text-sm md:text-base pt-1">
+                            {q.question}
+                          </h4>
+
+                          {/* Options Block */}
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                            {q.options.map((opt, optIdx) => {
+                              const isSelected = selectedAnswers[qIndex] === optIdx;
+                              
+                              let buttonStyles = "bg-slate-950/80 border-slate-800 text-slate-300 hover:border-purple-800";
+                              if (submittedQuiz) {
+                                if (optIdx === q.correctIndex) {
+                                  buttonStyles = "bg-emerald-950/80 border-emerald-500 text-emerald-200 font-medium";
+                                } else if (isSelected) {
+                                  buttonStyles = "bg-rose-950/80 border-rose-500 text-rose-200";
+                                } else {
+                                  buttonStyles = "bg-slate-950/40 border-slate-900 text-slate-500 pointer-events-none";
+                                }
+                              } else if (isSelected) {
+                                buttonStyles = "bg-purple-950/80 border-purple-500 text-purple-200 ring-2 ring-purple-500/20";
+                              }
+
+                              return (
+                                <button
+                                  key={optIdx}
+                                  disabled={submittedQuiz}
+                                  onClick={() => {
+                                    setSelectedAnswers({
+                                      ...selectedAnswers,
+                                      [qIndex]: optIdx
+                                    });
+                                  }}
+                                  className={`p-3 rounded-xl border text-left text-xs transition-all active:scale-[0.99] flex items-center justify-between ${buttonStyles}`}
+                                >
+                                  <span>{opt}</span>
+                                  {submittedQuiz && optIdx === q.correctIndex && (
+                                    <CheckCircle2 className="w-4 h-4 text-emerald-400 flex-shrink-0 ml-2" />
+                                  )}
+                                </button>
+                              );
+                            })}
+                          </div>
+
+                          {/* Individual AI Explanation (Shows after submit) */}
+                          {submittedQuiz && (
+                            <div className={`p-4 rounded-xl text-xs border ${
+                              isCorrect 
+                                ? 'bg-emerald-950/20 border-emerald-900/30 text-emerald-300/90' 
+                                : 'bg-rose-950/20 border-rose-900/30 text-rose-300/90'
+                            }`}>
+                              <div className="flex items-center space-x-1.5 mb-1.5 font-bold">
+                                <Info className="w-3.5 h-3.5" />
+                                <span>{isCorrect ? 'Correct Orbit!' : 'Celestial Correction Needed'}</span>
+                              </div>
+                              <p className="leading-relaxed">{q.explanation}</p>
+                            </div>
+                          )}
+
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+
+                {/* Score Summary and Actions */}
+                {!submittedQuiz ? (
+                  <div className="flex justify-center pt-4">
+                    <button
+                      onClick={() => {
+                        // Validate answers complete
+                        const answeredCount = Object.keys(selectedAnswers).length;
+                        if (answeredCount < quizQuestions.length) {
+                          showToast(`Answer all ${quizQuestions.length} questions first!`, "warning");
+                          return;
+                        }
+                        
+                        // Calculate score
+                        let correctCount = 0;
+                        quizQuestions.forEach((q, idx) => {
+                          if (selectedAnswers[idx] === q.correctIndex) {
+                            correctCount++;
+                          }
+                        });
+                        setQuizScore(correctCount);
+                        setSubmittedQuiz(true);
+                        showToast(`Quiz completed! Score: ${correctCount}/${quizQuestions.length}`, "success");
+                      }}
+                      className="bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-bold px-8 py-3.5 rounded-xl shadow-lg hover:shadow-purple-900/40 transition-all flex items-center space-x-2"
+                    >
+                      <Award className="w-5 h-5 text-amber-300" />
+                      <span>Transmit Answers</span>
+                    </button>
+                  </div>
+                ) : (
+                  <div className="bg-slate-900/80 border border-purple-900/50 rounded-2xl p-6 text-center shadow-2xl relative overflow-hidden backdrop-blur-md">
+                    <div className="absolute top-0 inset-x-0 h-1.5 bg-gradient-to-r from-purple-500 to-indigo-500" />
+                    
+                    <div className="max-w-md mx-auto space-y-4">
+                      <div className="inline-flex p-3 bg-purple-500/10 rounded-full border border-purple-500/20 text-purple-400 mb-2">
+                        <Award className="w-10 h-10 text-amber-400 animate-pulse" />
+                      </div>
+                      
+                      <h3 className="text-xl font-bold text-slate-100">Exam Assessment Finalized</h3>
+                      
+                      <div className="flex justify-center items-baseline space-x-1">
+                        <span className="text-4xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-purple-300 to-pink-300">
+                          {quizScore}
+                        </span>
+                        <span className="text-slate-500">/</span>
+                        <span className="text-xl text-slate-400">{quizQuestions.length}</span>
+                      </div>
+
+                      <p className="text-xs text-slate-400 leading-relaxed">
+                        {quizScore === quizQuestions.length 
+                          ? "Absolute mastery over this star system! Fantastic work, space cadet!" 
+                          : quizScore >= quizQuestions.length / 2 
+                            ? "Splendid planetary performance! Review the incorrect nodes and try again."
+                            : "Course correction recommended. Seek assistance from AstroAI companion on the Cosmic Hub."
+                        }
+                      </p>
+
+                      <div className="flex justify-center gap-3 pt-2">
+                        <button
+                          onClick={() => {
+                            setSelectedAnswers({});
+                            setSubmittedQuiz(false);
+                            setQuizScore(0);
+                            showToast("Quiz reset! Let's conquer it again.", "info");
+                          }}
+                          className="px-5 py-2.5 bg-slate-950 border border-purple-950 hover:bg-slate-900 text-slate-300 rounded-xl text-xs font-semibold"
+                        >
+                          Retry Exam
+                        </button>
+                        <button
+                          onClick={() => {
+                            setActiveTab('hub');
+                          }}
+                          className="px-5 py-2.5 bg-gradient-to-r from-purple-700 to-indigo-700 text-white hover:opacity-95 rounded-xl text-xs font-semibold"
+                        >
+                          Back to Intake Hub
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+              </div>
+            )}
+
+          </div>
+        )}
+
+        {/* TAB 3: NEBULA BOARD */}
+        {activeTab === 'dreams' && (
+          <div className="space-y-8">
+            
+            {/* Header description */}
+            <div className="bg-slate-900/50 border border-purple-900/30 rounded-2xl p-6 backdrop-blur-md shadow-xl flex flex-col md:flex-row justify-between items-center gap-6">
+              <div className="space-y-1">
+                <div className="flex items-center space-x-2">
+                  <Moon className="w-5 h-5 text-indigo-400" />
+                  <h2 className="text-xl font-bold tracking-wide text-slate-200">Nebula Board</h2>
+                </div>
+                <p className="text-xs text-slate-400 leading-relaxed max-w-2xl">
+                  Cast your visions, milestones, or positive reminders directly onto the digital spaceboard. Anchor your aspirations in public view so they align with your cosmic trajectory.
+                </p>
+              </div>
+
+              <div className="flex items-center space-x-4 bg-slate-950/60 p-3 rounded-xl border border-purple-950/60 text-xs">
+                <div className="flex items-center space-x-1.5 text-indigo-300">
+                  <Target className="w-4 h-4" />
+                  <span>Goals set: {dreams.length}</span>
+                </div>
+                <div className="w-px h-4 bg-purple-900/60" />
+                <div className="flex items-center space-x-1.5 text-pink-300">
+                  <Heart className="w-4 h-4" />
+                  <span>Achieved: {dreams.filter(d => d.achieved).length}</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Layout Grid: Post form on Left, Cards on Right */}
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
+              
+              {/* Creator sticky card (Left side) */}
+              <div className="lg:col-span-4 bg-slate-900/60 border border-purple-900/40 rounded-2xl p-6 shadow-xl backdrop-blur-md">
+                <div className="flex items-center space-x-2 mb-4">
+                  <Plus className="w-4 h-4 text-purple-400" />
+                  <h3 className="font-semibold text-sm tracking-wider uppercase text-purple-200">Pin a New Dream</h3>
+                </div>
+
+                <form onSubmit={addDream} className="space-y-4">
+                  
+                  {/* Title */}
+                  <div className="space-y-1">
+                    <label className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block">Dream Title</label>
+                    <input
+                      type="text"
+                      value={newDreamTitle}
+                      onChange={(e) => setNewDreamTitle(e.target.value)}
+                      placeholder="e.g. Ace final calculus"
+                      maxLength={40}
+                      className="w-full bg-slate-950 border border-purple-950 text-slate-200 rounded-xl px-4 py-2 text-xs focus:outline-none focus:border-purple-500 focus:ring-1 focus:ring-purple-500"
+                    />
+                  </div>
+
+                  {/* Description / Content */}
+                  <div className="space-y-1">
+                    <label className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block">Description / Mantra</label>
+                    <textarea
+                      value={newDreamContent}
+                      onChange={(e) => setNewDreamContent(e.target.value)}
+                      placeholder="Write your milestones, motivating words, or a visual picture of your future..."
+                      maxLength={180}
+                      className="w-full h-24 bg-slate-950 border border-purple-950 text-slate-200 rounded-xl px-4 py-3 text-xs focus:outline-none focus:border-purple-500 focus:ring-1 focus:ring-purple-500 resize-none"
+                    />
+                  </div>
+
+                  {/* Selector Block */}
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-1">
+                      <label className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block">Category</label>
+                      <select
+                        value={newDreamCategory}
+                        onChange={(e) => setNewDreamCategory(e.target.value)}
+                        className="w-full bg-slate-950 border border-purple-950 text-slate-300 rounded-xl px-2.5 py-2 text-xs focus:outline-none focus:border-purple-500"
+                      >
+                        <option value="Goal">Goal</option>
+                        <option value="Dream">Dream</option>
+                        <option value="Motivation">Mantra</option>
+                      </select>
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block">Aura Shade</label>
+                      <div className="flex items-center gap-2 h-9">
+                        {['purple', 'indigo', 'pink', 'gold'].map((color) => (
+                          <button
+                            key={color}
+                            type="button"
+                            onClick={() => setNewDreamColor(color)}
+                            className={`w-5.5 h-5.5 rounded-full border transition-all ${
+                              newDreamColor === color 
+                                ? 'ring-2 ring-white ring-offset-2 ring-offset-slate-950 scale-110' 
+                                : 'opacity-70 hover:opacity-100'
+                            } ${
+                              color === 'purple' ? 'bg-purple-600 border-purple-500' :
+                              color === 'indigo' ? 'bg-indigo-600 border-indigo-500' :
+                              color === 'pink' ? 'bg-pink-600 border-pink-500' :
+                              'bg-amber-600 border-amber-500'
+                            }`}
+                          />
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+
+                  <button
+                    type="submit"
+                    className="w-full py-2.5 bg-gradient-to-r from-purple-700 to-indigo-700 hover:from-purple-600 hover:to-indigo-600 text-white font-bold rounded-xl text-xs shadow-lg flex items-center justify-center space-x-1.5"
+                  >
+                    <Plus className="w-4 h-4" />
+                    <span>Launch Into Orbit</span>
+                  </button>
+
+                </form>
+              </div>
+
+              {/* Dream Board Cards (Right side) */}
+              <div className="lg:col-span-8">
+                {dreams.length === 0 ? (
+                  <div className="bg-slate-900/20 border border-dashed border-slate-800 rounded-2xl p-12 text-center text-slate-600">
+                    <p className="text-xs">No starry thoughts pinned yet. Add one to start organizing your life goals!</p>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    {dreams.map((dream) => (
+                      <div 
+                        key={dream.id} 
+                        className={`border rounded-2xl p-5 shadow-lg relative flex flex-col justify-between transition-all group ${getColorClasses(dream.color, dream.achieved)}`}
+                      >
+                        
+                        {/* Upper row */}
+                        <div>
+                          <div className="flex justify-between items-start mb-2">
+                            <span className="text-[10px] font-bold uppercase tracking-widest px-2 py-0.5 rounded-md bg-slate-950/40 border border-white/5">
+                              {dream.category}
+                            </span>
+                            
+                            {/* Action buttons */}
+                            <div className="flex items-center space-x-1.5">
+                              <button
+                                onClick={() => toggleAchieved(dream.id)}
+                                className={`p-1 rounded-md transition-all ${
+                                  dream.achieved 
+                                    ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40' 
+                                    : 'bg-slate-950/30 hover:bg-slate-950/60 text-slate-400 hover:text-emerald-400 border border-transparent'
+                                }`}
+                                title={dream.achieved ? "Mark in Progress" : "Complete Task"}
+                              >
+                                <CheckCircle2 className="w-3.5 h-3.5" />
+                              </button>
+                              <button
+                                onClick={() => deleteDream(dream.id)}
+                                className="p-1 bg-slate-950/30 hover:bg-slate-950/60 text-slate-400 hover:text-rose-400 rounded-md border border-transparent"
+                                title="Remove item"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          </div>
+
+                          <h4 className={`font-extrabold text-sm md:text-base leading-snug tracking-wide ${dream.achieved ? 'line-through text-slate-500' : 'text-slate-100'}`}>
+                            {dream.title}
+                          </h4>
+                          <p className={`mt-2 text-xs leading-relaxed ${dream.achieved ? 'text-slate-500' : 'text-slate-300'}`}>
+                            {dream.content}
+                          </p>
+                        </div>
+
+                        {/* Achieved banner if toggled */}
+                        {dream.achieved && (
+                          <div className="mt-4 flex items-center space-x-1 bg-emerald-950/40 border border-emerald-900/60 px-2 py-1 rounded-lg w-max text-[10px] font-bold text-emerald-400 uppercase tracking-widest">
+                            <Sparkles className="w-3 h-3 text-amber-400" />
+                            <span>Reached Celestial Orbit</span>
+                          </div>
+                        )}
+
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+            </div>
+
+          </div>
+        )}
+
+      </main>
+
+      {/* Footer Branding info */}
+      <footer className="mt-16 border-t border-purple-950/40 pt-6 text-center text-slate-600 text-xs">
+        <p className="flex items-center justify-center space-x-1 font-mono">
+          <span>NovaStudy Portal</span>
+          <span>•</span>
+          <span>Infinite Knowledge Engine</span>
+        </p>
+      </footer>
+
+    </div>
+  );
+}
+
